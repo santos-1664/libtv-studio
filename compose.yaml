@@ -1,0 +1,46 @@
+services:
+  data-init:
+    build: .
+    image: libtv-studio:local
+    user: "0:0"
+    entrypoint: ["node", "scripts/restore-docker-data.mjs"]
+    volumes:
+      - type: bind
+        source: ./data
+        target: /seed
+        read_only: true
+      - studio-data:/restore
+    restart: "no"
+  studio:
+    build: .
+    image: libtv-studio:local
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${PORT:-3100}:3100"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3100
+      DATA_DIR: /app/data
+      ACCESS_PASSWORD: ${ACCESS_PASSWORD:-}
+      APP_ORIGIN: ${APP_ORIGIN:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      TEXT_BASE_URL: ${TEXT_BASE_URL:-}
+      TEXT_API_KEY: ${TEXT_API_KEY:-}
+      TEXT_MODEL: ${TEXT_MODEL:-}
+      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-bailian}
+      IMAGE_BASE_URL: ${IMAGE_BASE_URL:-}
+      IMAGE_API_KEY: ${IMAGE_API_KEY:-}
+      IMAGE_MODEL: ${IMAGE_MODEL:-}
+      VIDEO_PROVIDER: ${VIDEO_PROVIDER:-bailian}
+      VIDEO_BASE_URL: ${VIDEO_BASE_URL:-}
+      VIDEO_API_KEY: ${VIDEO_API_KEY:-}
+      VIDEO_MODEL: ${VIDEO_MODEL:-}
+    volumes:
+      - studio-data:/app/data
+    restart: unless-stopped
+volumes:
+  studio-data:
