@@ -14,6 +14,7 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/shared ./shared
 COPY --from=build /app/scripts ./scripts
+COPY LICENSE THIRD_PARTY_NOTICES.md ./
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node
 EXPOSE 3100

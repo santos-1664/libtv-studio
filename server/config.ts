@@ -8,6 +8,7 @@ import { settingsSchema } from './schema';
 export interface ProviderConfig {protocol?:'openai'|'ark'|'bailian';kind:NodeKind;baseUrl:string;key:string;model:string}
 export interface Settings {imageProvider:'openai'|'bailian';videoProvider:'ark'|'bailian';textBaseUrl:string;textKey:string;textModel:string;imageBaseUrl:string;imageKey:string;imageModel:string;videoBaseUrl:string;videoKey:string;videoModel:string}
 function sameOrigin(first:string,second:string){try{return new URL(first).origin===new URL(second).origin}catch{return false}}
+const providerKinds=['text','image','video'] as const;
 export class Configuration {
   readonly key:Buffer;
   constructor(private store:Store,private env:NodeJS.ProcessEnv=process.env){
@@ -21,31 +22,36 @@ export class Configuration {
     const persisted=this.store.setting('providers');
     // Allow-list persisted fields: legacy credentials never become API keys or survive a new save.
     const saved=persisted?settingsSchema.strip().parse(this.decrypt<unknown>(persisted)):{};
-    const textBaseUrl=this.env.TEXT_BASE_URL?.trim()||'';
-    const textKey=this.env.TEXT_API_KEY?.trim()||'';
-    return {imageProvider:this.env.IMAGE_PROVIDER==='bailian'?'bailian':'openai',videoProvider:this.env.VIDEO_PROVIDER==='bailian'?'bailian':'ark',textBaseUrl,textKey,textModel:this.env.TEXT_MODEL||'',imageBaseUrl:this.env.IMAGE_BASE_URL||'',imageKey:this.env.IMAGE_API_KEY||'',imageModel:this.env.IMAGE_MODEL||'',videoBaseUrl:this.env.VIDEO_BASE_URL||'',videoKey:this.env.VIDEO_API_KEY||'',videoModel:this.env.VIDEO_MODEL||'',...saved,
-      // An environment key also belongs to its configured origin, not an unrelated saved URL.
-      ...(saved.textKey===undefined&&saved.textBaseUrl!==undefined&&!sameOrigin(saved.textBaseUrl,textBaseUrl)?{textKey:''}:{})};
+    const defaults:Settings={imageProvider:this.env.IMAGE_PROVIDER==='bailian'?'bailian':'openai',videoProvider:this.env.VIDEO_PROVIDER==='bailian'?'bailian':'ark',textBaseUrl:this.env.TEXT_BASE_URL?.trim()||'',textKey:this.env.TEXT_API_KEY?.trim()||'',textModel:this.env.TEXT_MODEL||'',imageBaseUrl:this.env.IMAGE_BASE_URL?.trim()||'',imageKey:this.env.IMAGE_API_KEY?.trim()||'',imageModel:this.env.IMAGE_MODEL||'',videoBaseUrl:this.env.VIDEO_BASE_URL?.trim()||'',videoKey:this.env.VIDEO_API_KEY?.trim()||'',videoModel:this.env.VIDEO_MODEL||''};
+    const settings={...defaults,...saved};
+    // Environment keys belong to their configured origin, not an unrelated saved URL.
+    for(const kind of providerKinds){
+      const key=`${kind}Key` as const,baseUrl=`${kind}BaseUrl` as const;
+      if(saved[key]===undefined&&saved[baseUrl]!==undefined&&!sameOrigin(saved[baseUrl],defaults[baseUrl]))settings[key]='';
+    }
+    return settings;
   }
   update(value:unknown){const patch=settingsSchema.parse(value);const current=this.settings();
     for(const field of ['textBaseUrl','imageBaseUrl','videoBaseUrl'] as const){if(patch[field])this.validateBaseUrl(patch[field]!);}
-    this.textCredential(current,patch);
-    // Empty credentials preserve saved values; text keys are first checked against the URL origin.
+    // Validate every provider before committing any part of the settings patch.
+    for(const kind of providerKinds)this.credential(kind,current,patch);
+    // Empty credentials preserve saved values only after all origin checks have passed.
     for(const key of ['textKey','imageKey','videoKey'] as const)if(patch[key]==='')delete patch[key];
     this.store.setSetting('providers',this.encrypt({...current,...patch}));
   }
   validateBaseUrl(value:string){let url:URL;try{url=new URL(value)}catch{throw new HttpError(400,'服务地址必须是完整的 HTTP(S) URL')};if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new HttpError(400,'服务地址格式无效');if(url.protocol!=='https:' && !['localhost','127.0.0.1','[::1]'].includes(url.hostname))throw new HttpError(400,'远程模型服务必须使用 HTTPS');}
-  private textCredential(saved:Settings,patch:{textBaseUrl?:string;textKey?:string}){
-    if(patch.textKey)return patch.textKey;
-    if(saved.textKey&&patch.textBaseUrl!==undefined&&!sameOrigin(patch.textBaseUrl,saved.textBaseUrl))throw new HttpError(400,'文本服务地址已更换来源，请填写该服务的新 API Key；不会复用原服务密钥');
-    return saved.textKey;
+  private credential(kind:NodeKind,saved:Settings,patch:Partial<Settings>){
+    const key=`${kind}Key` as const,baseUrl=`${kind}BaseUrl` as const;
+    if(patch[key])return patch[key];
+    if(saved[key]&&patch[baseUrl]!==undefined&&!sameOrigin(patch[baseUrl],saved[baseUrl]))throw new HttpError(400,`${kind==='text'?'文本':kind==='image'?'图片':'视频'}服务地址已更换来源，请填写该服务的新 API Key；不会复用原服务密钥`);
+    return saved[key];
   }
   modelCatalog(overrides:unknown={}):ProviderConfig{
     const patch=settingsSchema.pick({textBaseUrl:true,textKey:true}).parse(overrides);
     const saved=this.settings();
     const baseUrl=(patch.textBaseUrl??saved.textBaseUrl).trim();
     if(baseUrl)this.validateBaseUrl(baseUrl);
-    const key=this.textCredential(saved,patch);
+    const key=this.credential('text',saved,patch);
     if(!key)throw new HttpError(503,'尚未配置文本服务 API Key，请在设置中填写服务地址与 API Key');
     this.validateBaseUrl(baseUrl);
     // Catalog checks validate the current form without persisting credentials or requiring a model.
